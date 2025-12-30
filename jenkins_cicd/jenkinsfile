@@ -1,0 +1,101 @@
+pipeline {
+    agent any
+
+    environment {
+        AWS_REGION   = 'us-east-1'
+        AWS_ACCOUNT  = '268200822979'
+        ECR_REPO     = 'flask_ci_cd_automation'
+        IMAGE_NAME   = 'flask-cicd-app'
+        IMAGE_TAG    = "${BUILD_NUMBER}"
+        ECR_REGISTRY = "${AWS_ACCOUNT}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+    }
+
+    stages {
+
+        stage('Checkout Code') {
+            steps {
+                git branch: 'main',
+                    url: 'https://github.com/ManideepReddy3533/Flask_CI-CD.git'
+            }
+        }
+
+        stage('List Files') {
+            steps {
+                sh 'ls -l'
+            }
+        }
+
+        stage('Verify Python') {
+            steps {
+                sh 'python3 --version'
+            }
+        }
+
+        stage('Install Dependencies & Verify App') {
+            steps {
+                sh '''
+                  python3 -m venv venv
+                  venv/bin/pip install --upgrade pip
+                  venv/bin/pip install -r requirements.txt
+
+                  venv/bin/python -c "import flask; print('Flask OK')"
+                  venv/bin/python -c "from app import create_app; print('App import OK')"
+                '''
+            }
+        }
+
+        stage('Run Tests') {
+            steps {
+                sh 'venv/bin/pytest -v tests/'
+                echo "Test cases also passed"
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                echo "Started Docker build"
+                sh '''
+                  docker --version
+                  docker build -t ${IMAGE_NAME}:latest .
+                '''
+                echo "Docker build success"
+            }
+        }
+
+        stage('Login to ECR') {
+            steps {
+                withCredentials([[
+                    $class: 'AmazonWebServicesCredentialsBinding',
+                    credentialsId: '9ea41104-78c7-49e1-9a20-ff7d726e0062'
+                ]]) {
+                    sh '''
+                      aws ecr get-login-password --region $AWS_REGION \
+                      | docker login --username AWS --password-stdin $ECR_REGISTRY
+                    '''
+                }
+            }
+        }
+
+        stage('Tag & Push Image to ECR') {
+            steps {
+                sh '''
+                  docker tag ${IMAGE_NAME}:latest \
+                  ${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG}
+
+                  docker push \
+                  ${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG}
+                '''
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "✅ CI checks passed & image pushed to ECR successfully"
+            echo "Image: ${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG}"
+        }
+        failure {
+            echo "❌ CI/CD pipeline failed"
+        }
+    }
+}
